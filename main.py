@@ -2,11 +2,11 @@ import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from database import db, create_document, get_documents
 
-app = FastAPI(title="Dark Whale SaaS API", version="1.0.0")
+app = FastAPI(title="Dark Whale SaaS API", version="1.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -54,6 +54,30 @@ def api_list(collection: str):
                 d["_id"] = str(d["_id"]) 
             return d
         return [transform(d) for d in docs]
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class UpdatePayload(BaseModel):
+    data: Dict[str, Any]
+
+
+@app.patch("/api/update/{collection}/{doc_id}")
+def api_update(collection: str, doc_id: str, payload: UpdatePayload):
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    try:
+        from bson import ObjectId
+        if not ObjectId.is_valid(doc_id):
+            raise HTTPException(status_code=400, detail="Invalid document id")
+        update_data = dict(payload.data)
+        update_data["updated_at"] = __import__("datetime").datetime.utcnow()
+        result = db[collection.lower()].update_one({"_id": ObjectId(doc_id)}, {"$set": update_data})
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Document not found")
+        return {"updated": True}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
