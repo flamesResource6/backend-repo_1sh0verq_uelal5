@@ -1,8 +1,12 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Any, Dict
 
-app = FastAPI()
+from database import db, create_document, get_documents
+
+app = FastAPI(title="Dark Whale SaaS API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -12,13 +16,47 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/")
 def read_root():
-    return {"message": "Hello from FastAPI Backend!"}
+    return {"message": "Dark Whale SaaS API running"}
 
-@app.get("/api/hello")
-def hello():
-    return {"message": "Hello from the backend API!"}
+
+# Generic create endpoint leveraging schemas defined in schemas.py via collection name
+class CreatePayload(BaseModel):
+    collection: str
+    data: Dict[str, Any]
+
+
+@app.post("/api/create")
+def api_create(payload: CreatePayload):
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    collection = payload.collection.lower()
+    try:
+        inserted_id = create_document(collection, payload.data)
+        return {"inserted_id": inserted_id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/list/{collection}")
+def api_list(collection: str):
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    try:
+        docs = get_documents(collection.lower(), {}, limit=100)
+        # Convert ObjectId to string
+        from bson import ObjectId
+        def transform(doc):
+            d = dict(doc)
+            if isinstance(d.get("_id"), ObjectId):
+                d["_id"] = str(d["_id"]) 
+            return d
+        return [transform(d) for d in docs]
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 @app.get("/test")
 def test_database():
@@ -31,37 +69,25 @@ def test_database():
         "connection_status": "Not Connected",
         "collections": []
     }
-    
+
     try:
-        # Try to import database module
-        from database import db
-        
         if db is not None:
             response["database"] = "✅ Available"
-            response["database_url"] = "✅ Configured"
-            response["database_name"] = db.name if hasattr(db, 'name') else "✅ Connected"
+            response["database_url"] = "✅ Configured" if os.getenv("DATABASE_URL") else "❌ Not Set"
+            response["database_name"] = os.getenv("DATABASE_NAME") or "❌ Not Set"
             response["connection_status"] = "Connected"
-            
-            # Try to list collections to verify connectivity
             try:
                 collections = db.list_collection_names()
-                response["collections"] = collections[:10]  # Show first 10 collections
+                response["collections"] = collections[:10]
                 response["database"] = "✅ Connected & Working"
             except Exception as e:
                 response["database"] = f"⚠️  Connected but Error: {str(e)[:50]}"
         else:
             response["database"] = "⚠️  Available but not initialized"
-            
-    except ImportError:
-        response["database"] = "❌ Database module not found (run enable-database first)"
+
     except Exception as e:
         response["database"] = f"❌ Error: {str(e)[:50]}"
-    
-    # Check environment variables
-    import os
-    response["database_url"] = "✅ Set" if os.getenv("DATABASE_URL") else "❌ Not Set"
-    response["database_name"] = "✅ Set" if os.getenv("DATABASE_NAME") else "❌ Not Set"
-    
+
     return response
 
 
